@@ -4,33 +4,74 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    name: Linux x86_64
-    runs-on: ubuntu-latest
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: epub2pdf
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: epub2pdf.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
-      - run: cargo build --release --locked
+      # Linux uses a static musl binary so it runs regardless of the glibc version.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Package
         run: |
-          name="epub2pdf-${GITHUB_REF_NAME}-linux-x86_64"
+          name="epub2pdf-${GITHUB_REF_NAME}-${{ matrix.name }}"
           mkdir -p "dist/$name"
-          cp target/release/epub2pdf README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           cp assets/fonts/LICENSE "dist/$name/FONT-LICENSE"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+            sha256sum "$name.zip" > "$name.zip.sha256"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          rm -r "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.tar.gz
-            dist/*.sha256
+          files: dist/*
           generate_release_notes: true

@@ -21,8 +21,13 @@ içine gömülüdür, bu yüzden PDF her bilgisayarda aynı görünür.
 
 ### Kurulum
 
-Linux için hazır derlenmiş dosyayı [Releases](https://github.com/xdaxer/epub2pdf/releases)
-sayfasından indirip `epub2pdf` dosyasını `PATH` üzerindeki bir klasöre kopyalamanız yeter. Kaynaktan derlemek için
+[Releases](https://github.com/xdaxer/epub2pdf/releases) sayfasından sisteminize uygun
+dosyayı indirin:
+
+- **Linux:** `epub2pdf-…-linux-x86_64.tar.gz` dosyasını açın ve `epub2pdf`'i `PATH` üzerindeki
+  bir klasöre (örneğin `~/.local/bin`) kopyalayın.
+- **Windows:** `epub2pdf-…-windows-x86_64.zip` dosyasını açın ve `epub2pdf.exe`'yi `PATH`
+  üzerindeki bir klasöre koyun ya da bulunduğu klasörde komut isteminden çalıştırın. Kaynaktan derlemek için
 [Rust](https://rustup.rs) 1.92 veya üstü gerekir:
 
 ```bash
@@ -61,7 +66,8 @@ Toplu dönüştürmede PDF'i zaten olan kitaplar atlanır ve sonda özet yazıl�
 Sık kullandığınız değerleri bir dosyaya yazabilirsiniz; komut satırı her zaman
 dosyadaki değeri ezer.
 
-Dosyanın yeri: `~/.config/epub2pdf/config.toml`
+- Linux: `~/.config/epub2pdf/config.toml`
+- Windows: `%APPDATA%\epub2pdf\config.toml`
 
 ```toml
 size = "A5"
@@ -99,9 +105,13 @@ PDF looks the same everywhere.
 
 ### Install
 
-Download the prebuilt Linux binary from
-[Releases](https://github.com/xdaxer/epub2pdf/releases) and copy `epub2pdf` into a
-folder on your `PATH`. To build from source you need [Rust](https://rustup.rs) 1.92+:
+Download the archive for your system from
+[Releases](https://github.com/xdaxer/epub2pdf/releases):
+
+- **Linux:** unpack `epub2pdf-…-linux-x86_64.tar.gz` and copy `epub2pdf` into a folder on
+  your `PATH` (for example `~/.local/bin`).
+- **Windows:** unpack `epub2pdf-…-windows-x86_64.zip` and put `epub2pdf.exe` into a folder
+  on your `PATH`, or run it from its folder in a terminal. To build from source you need [Rust](https://rustup.rs) 1.92+:
 
 ```bash
 cargo install --path .
@@ -132,7 +142,8 @@ In batch mode, books that already have a PDF are skipped and a summary is printe
 
 Defaults can be set in `config.toml` (command line values win):
 
-Location: `~/.config/epub2pdf/config.toml`
+- Linux: `~/.config/epub2pdf/config.toml`
+- Windows: `%APPDATA%\epub2pdf\config.toml`
 
 ```toml
 size = "A5"            # A4, A5, A6, B5, Letter

@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Format, lint and test
+  lint:
+    name: Format and lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,24 +21,57 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
 
-  build:
-    name: Linux release build
-    needs: test
-    runs-on: ubuntu-latest
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked
+      - run: cargo test --locked
+
+  build:
+    name: Release build (${{ matrix.name }})
+    needs: [lint, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: epub2pdf
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: epub2pdf.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      # Linux uses a static musl binary so it runs regardless of the glibc version.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Smoke test
         run: |
+          bin=target/${{ matrix.target }}/release/${{ matrix.bin }}
           cargo run --example sample_epub -- samples
-          ./target/release/epub2pdf samples
-          ./target/release/epub2pdf check samples/ornek-kitap.pdf
+          "$bin" samples
+          "$bin" check samples/ornek-kitap.pdf
       - uses: actions/upload-artifact@v4
         with:
-          name: epub2pdf-linux-x86_64
-          path: target/release/epub2pdf
+          name: epub2pdf-${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
           if-no-files-found: error
