@@ -1,0 +1,41 @@
+[package]
+name = "epub2pdf"
+version = "0.1.0"
+edition = "2024"
+description = "Convert EPUB books into readable PDFs (Turkish and English CLI)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/xdaxer/epub2pdf"
+readme = "README.md"
+keywords = ["epub", "pdf", "ebook", "typst", "converter"]
+categories = ["command-line-utilities"]
+rust-version = "1.92"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["string"] }
+dirs = "7.0.0"
+lopdf = "0.47.0"
+roxmltree = "0.21.2"
+scraper = "0.29.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sys-locale = "0.3.2"
+toml = "1.2.0"
+typst = "0.15.1"
+typst-kit = { version = "0.15.1", default-features = false, features = ["scan-fonts"] }
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
+typst-render = "0.15.1"
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+
+[profile.dev]
+debug = false
+
+[profile.dev.package."*"]
+debug = false
+
+[dev-dependencies]
+tempfile = "3.27.0"
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
