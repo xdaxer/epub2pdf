@@ -4,6 +4,7 @@
 //! epub2pdf [OPTIONS] <EPUB_OR_DIR>...   convert (PDF is written next to the EPUB)
 //! epub2pdf check <PDF>                  inspect a PDF      (alias: kontrol)
 //! epub2pdf info <EPUB>                  show EPUB metadata (alias: bilgi)
+//! epub2pdf set [KEY VALUE]...           show or change saved settings (alias: ayarla)
 //! ```
 //!
 //! Exit codes: 0 success, 1 a book could not be converted or inspected,
@@ -16,7 +17,7 @@ use std::time::Instant;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 
-use crate::config::{self, Overrides, Paper, Settings};
+use crate::config::{self, ConfigError, FileConfig, Key, Overrides, Paper, Settings};
 use crate::i18n::Lang;
 use crate::render::{self, Preview};
 use crate::{check, epub, info, t};
@@ -54,6 +55,7 @@ where
     match matches.subcommand() {
         Some(("check", sub)) => run_check(sub),
         Some(("info", sub)) => run_info(sub),
+        Some(("set", sub)) => run_set(sub),
         _ => run_convert(&matches),
     }
 }
@@ -103,6 +105,53 @@ pub fn command() -> Command {
             )),
     );
 
+    let config_arg = || {
+        Arg::new("config")
+            .long("config")
+            .visible_alias("ayar")
+            .value_name(t!("DOSYA", "FILE"))
+            .value_parser(value_parser!(PathBuf))
+            .help(t!(
+                "Ayar dosyası (varsayılan: kullanıcı ayar klasöründe epub2pdf/config.toml)",
+                "Config file (default: epub2pdf/config.toml in the user config directory)"
+            ))
+    };
+    let set = help(
+        Command::new("set")
+            .visible_alias("ayarla")
+            .about(t!(
+                "Kayıtlı ayarları göster ya da değiştir",
+                "Show or change the saved settings"
+            ))
+            .after_help(t!(
+                "Ayarlar: {}\n'varsayilan' değeri ayarı siler.\n\nÖrnekler:\n  epub2pdf set                       ayarları göster\n  epub2pdf set punto 11 boyut A5\n  epub2pdf set kenar 25,40,25,25     üst, iç (cilt), dış, alt mm\n  epub2pdf set yazi-tipi \"DejaVu Serif\"\n  epub2pdf set punto varsayilan\n  epub2pdf set --sifirla             tümünü varsayılanlara döndür",
+                "Settings: {}\nThe value 'default' removes a setting.\n\nExamples:\n  epub2pdf set                       show the settings\n  epub2pdf set font-size 11 size A5\n  epub2pdf set margins 25,40,25,25   top, inside (binding), outside, bottom mm\n  epub2pdf set font \"DejaVu Serif\"\n  epub2pdf set font-size default\n  epub2pdf set --reset               restore all defaults",
+                Key::NAMES
+            ))
+            .help_template(sub_template())
+            .arg(
+                Arg::new("pairs")
+                    .value_name(t!("AYAR DEĞER", "KEY VALUE"))
+                    .num_args(0..)
+                    .help(t!(
+                        "Değiştirilecek ayar ve yeni değeri; birden çok çift verilebilir",
+                        "Setting to change and its new value; several pairs may be given"
+                    )),
+            )
+            .arg(
+                Arg::new("reset")
+                    .long("reset")
+                    .visible_alias("sifirla")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("pairs")
+                    .help(t!(
+                        "Ayar dosyasını sil, varsayılanlara dön",
+                        "Delete the config file and go back to the defaults"
+                    )),
+            )
+            .arg(config_arg()),
+    );
+
     help(Command::new("epub2pdf"))
         .version(env!("CARGO_PKG_VERSION"))
         .about(t!(
@@ -110,8 +159,8 @@ pub fn command() -> Command {
             "Converts EPUB books into readable PDFs, written next to each EPUB."
         ))
         .override_usage(t!(
-            "epub2pdf [SEÇENEKLER] <EPUB_VEYA_KLASÖR>...\n       epub2pdf kontrol <PDF>\n       epub2pdf bilgi <EPUB>",
-            "epub2pdf [OPTIONS] <EPUB_OR_DIR>...\n       epub2pdf check <PDF>\n       epub2pdf info <EPUB>"
+            "epub2pdf [SEÇENEKLER] <EPUB_VEYA_KLASÖR>...\n       epub2pdf kontrol <PDF>\n       epub2pdf bilgi <EPUB>\n       epub2pdf ayarla [AYAR DEĞER]...",
+            "epub2pdf [OPTIONS] <EPUB_OR_DIR>...\n       epub2pdf check <PDF>\n       epub2pdf info <EPUB>\n       epub2pdf set [KEY VALUE]..."
         ))
         .help_template(main_template())
         .disable_help_subcommand(true)
@@ -147,8 +196,8 @@ pub fn command() -> Command {
                 .visible_alias("boyut")
                 .value_name(t!("BOYUT", "SIZE"))
                 .help(t!(
-                    "Sayfa boyutu: {} (varsayılan A5)",
-                    "Page size: {} (default A5)",
+                    "Sayfa boyutu: {} (varsayılan A4)",
+                    "Page size: {} (default A4)",
                     Paper::NAMES
                 )),
         )
@@ -157,8 +206,8 @@ pub fn command() -> Command {
                 .long("font")
                 .value_name(t!("YAZI_TİPİ", "FONT"))
                 .help(t!(
-                    "Yazı tipi adı ya da .ttf/.otf dosyası (varsayılan gömülü DejaVu Serif)",
-                    "Font name or .ttf/.otf file (default: embedded DejaVu Serif)"
+                    "Yazı tipi adı ya da .ttf/.otf dosyası (varsayılan Times New Roman)",
+                    "Font name or .ttf/.otf file (default Times New Roman)"
                 )),
         )
         .arg(
@@ -168,8 +217,19 @@ pub fn command() -> Command {
                 .value_name("PT")
                 .value_parser(value_parser!(f64))
                 .help(t!(
-                    "Yazı boyutu, punto (varsayılan 10.5)",
-                    "Font size in points (default 10.5)"
+                    "Yazı boyutu, punto (varsayılan 12)",
+                    "Font size in points (default 12)"
+                )),
+        )
+        .arg(
+            Arg::new("line-spacing")
+                .long("line-spacing")
+                .visible_alias("satir-araligi")
+                .value_name(t!("ARALIK", "SPACING"))
+                .value_parser(value_parser!(f64))
+                .help(t!(
+                    "Satır aralığı: 1 tek, 1.5, 2 çift (varsayılan 1.5)",
+                    "Line spacing: 1 single, 1.5, 2 double (default 1.5)"
                 )),
         )
         .arg(
@@ -178,8 +238,8 @@ pub fn command() -> Command {
                 .visible_alias("kenar")
                 .value_name("MM")
                 .help(t!(
-                    "Kenar boşlukları, mm: '15' ya da 'üst,yan,alt' (varsayılan 18,16,20)",
-                    "Margins in mm: '15' or 'top,sides,bottom' (default 18,16,20)"
+                    "Kenar boşlukları, mm: '25', 'üst,yan,alt' ya da 'üst,iç,dış,alt' (varsayılan 25,40,25,25; iç = cilt tarafı)",
+                    "Margins in mm: '25', 'top,sides,bottom' or 'top,inside,outside,bottom' (default 25,40,25,25; inside = binding side)"
                 )),
         )
         .arg(
@@ -193,26 +253,18 @@ pub fn command() -> Command {
                     "Write the cover, a text page and the last page as PNG files here"
                 )),
         )
-        .arg(
-            Arg::new("config")
-                .long("config")
-                .visible_alias("ayar")
-                .value_name(t!("DOSYA", "FILE"))
-                .value_parser(value_parser!(PathBuf))
-                .help(t!(
-                    "Ayar dosyası (varsayılan: kullanıcı ayar klasöründe epub2pdf/config.toml)",
-                    "Config file (default: epub2pdf/config.toml in the user config directory)"
-                )),
-        )
+        .arg(config_arg())
         .arg(
             Arg::new("version")
                 .short('V')
+                .visible_short_alias('v')
                 .long("version")
                 .action(ArgAction::Version)
                 .help(t!("Sürümü göster", "Print version")),
         )
         .subcommand(check)
         .subcommand(info)
+        .subcommand(set)
 }
 
 fn main_template() -> &'static str {
@@ -229,10 +281,10 @@ fn main_template() -> &'static str {
 fn sub_template() -> &'static str {
     match crate::i18n::lang() {
         Lang::Tr => {
-            "{about}\n\nKullanım: {usage}\n\nArgümanlar:\n{positionals}\n\nSeçenekler:\n{options}\n"
+            "{about}\n\nKullanım: {usage}\n\nArgümanlar:\n{positionals}\n\nSeçenekler:\n{options}\n{after-help}"
         }
         Lang::En => {
-            "{about}\n\nUsage: {usage}\n\nArguments:\n{positionals}\n\nOptions:\n{options}\n"
+            "{about}\n\nUsage: {usage}\n\nArguments:\n{positionals}\n\nOptions:\n{options}\n{after-help}"
         }
     }
 }
@@ -265,11 +317,130 @@ fn run_info(matches: &ArgMatches) -> i32 {
     }
 }
 
+fn run_set(matches: &ArgMatches) -> i32 {
+    let explicit = matches.get_one::<PathBuf>("config");
+    let Some(path) = config::config_path(explicit.map(PathBuf::as_path)) else {
+        eprintln!("{}: {}", t!("Hata", "Error"), ConfigError::NoConfigDir);
+        return EXIT_USAGE;
+    };
+
+    if matches.get_flag("reset") {
+        if path.exists()
+            && let Err(e) = std::fs::remove_file(&path)
+        {
+            eprintln!(
+                "{}: {}",
+                t!("Hata", "Error"),
+                ConfigError::Write(path.clone(), e)
+            );
+            return EXIT_FAILED;
+        }
+        println!(
+            "{}",
+            t!(
+                "Ayarlar varsayılanlara döndü.",
+                "Settings restored to the defaults."
+            )
+        );
+        return show_settings(&path);
+    }
+
+    let words: Vec<&String> = matches
+        .get_many::<String>("pairs")
+        .map(|v| v.collect())
+        .unwrap_or_default();
+    if words.is_empty() {
+        return show_settings(&path);
+    }
+    if !words.len().is_multiple_of(2) {
+        eprintln!(
+            "{}: {}",
+            t!("Hata", "Error"),
+            t!(
+                "her ayar için bir değer verin, örneğin: epub2pdf set punto 11",
+                "give a value for each setting, for example: epub2pdf set font-size 11"
+            )
+        );
+        return EXIT_USAGE;
+    }
+    let mut pairs = Vec::new();
+    for pair in words.chunks(2) {
+        match Key::parse(pair[0]) {
+            Some(key) => pairs.push((key, pair[1].clone())),
+            None => {
+                eprintln!(
+                    "{}: {}",
+                    t!("Hata", "Error"),
+                    ConfigError::UnknownKey(pair[0].clone())
+                );
+                return EXIT_USAGE;
+            }
+        }
+    }
+    match config::set_values(&path, &pairs) {
+        Ok(_) => {
+            println!("{}", t!("Kaydedildi.", "Saved."));
+            show_settings(&path)
+        }
+        Err(e @ (ConfigError::Read(..) | ConfigError::Write(..))) => {
+            eprintln!("{}: {e}", t!("Hata", "Error"));
+            EXIT_FAILED
+        }
+        Err(e) => {
+            eprintln!("{}: {e}", t!("Hata", "Error"));
+            EXIT_USAGE
+        }
+    }
+}
+
+/// Prints the settings a conversion would use (without command line options).
+fn show_settings(path: &Path) -> i32 {
+    let exists = path.exists();
+    let file = if exists {
+        match config::read_file(path) {
+            Ok(file) => file,
+            Err(e) => {
+                eprintln!("{}: {e}", t!("Hata", "Error"));
+                return EXIT_USAGE;
+            }
+        }
+    } else {
+        FileConfig::default()
+    };
+    let settings = match config::combine(&file, &Overrides::default()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{}: {e}", t!("Hata", "Error"));
+            return EXIT_USAGE;
+        }
+    };
+    let note = if exists {
+        String::new()
+    } else {
+        t!(" (henüz yok)", " (not created yet)")
+    };
+    println!(
+        "{}: {}{note}",
+        t!("Ayar dosyası", "Config file"),
+        path.display()
+    );
+    for key in Key::ALL {
+        let origin = if key.is_set_in(&file) {
+            String::new()
+        } else {
+            t!("  (varsayılan)", "  (default)")
+        };
+        println!("  {:<14} {}{origin}", key.label(), key.display(&settings));
+    }
+    EXIT_OK
+}
+
 fn run_convert(matches: &ArgMatches) -> i32 {
     let overrides = Overrides {
         size: matches.get_one::<String>("size").cloned(),
         font: matches.get_one::<String>("font").cloned(),
         font_size: matches.get_one::<f64>("font-size").copied(),
+        line_spacing: matches.get_one::<f64>("line-spacing").copied(),
         margins: matches.get_one::<String>("margins").cloned(),
     };
     let config_file = matches.get_one::<PathBuf>("config");

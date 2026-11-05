@@ -1,8 +1,8 @@
 //! Typesetting the converted book with Typst and writing the PDF.
 //!
 //! The Typst "world" is entirely in memory: one generated source file, the
-//! book's images under `/img/..`, the embedded DejaVu fonts and, only when a
-//! different font is requested, the system fonts.
+//! book's images under `/img/..`, the embedded Liberation Serif and DejaVu
+//! fonts and, unless one of those is requested, the system fonts.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -17,13 +17,19 @@ use typst::{Library, LibraryExt, World};
 use typst_kit::fonts::FontStore;
 use typst_layout::PagedDocument;
 
-use crate::config::{DEFAULT_FONT, Settings};
+use crate::config::{DEFAULT_FONT, FALLBACK_FONT, LAST_RESORT_FONT, Settings};
 use crate::convert::{self, Document, typst_string};
 use crate::epub::Book;
 use crate::t;
 
 /// Fonts compiled into the binary so the output looks the same everywhere.
-const EMBEDDED_FONTS: [&[u8]; 5] = [
+/// Liberation Serif has the same metrics as Times New Roman, so a book set
+/// with it breaks lines and pages exactly as it would with Times New Roman.
+const EMBEDDED_FONTS: [&[u8]; 9] = [
+    include_bytes!("../assets/fonts/LiberationSerif-Regular.ttf"),
+    include_bytes!("../assets/fonts/LiberationSerif-Bold.ttf"),
+    include_bytes!("../assets/fonts/LiberationSerif-Italic.ttf"),
+    include_bytes!("../assets/fonts/LiberationSerif-BoldItalic.ttf"),
     include_bytes!("../assets/fonts/DejaVuSerif.ttf"),
     include_bytes!("../assets/fonts/DejaVuSerif-Bold.ttf"),
     include_bytes!("../assets/fonts/DejaVuSerif-Italic.ttf"),
@@ -93,7 +99,7 @@ pub fn render(
     preview: Option<Preview>,
 ) -> Result<Rendered, RenderError> {
     let document = convert::convert_book(book);
-    let fonts = load_fonts(&settings.font)?;
+    let (fonts, font_note) = load_fonts(&settings.font)?;
     let images = image_files(book, &document);
 
     // A font given as a file path is used under its family name.
@@ -101,7 +107,7 @@ pub fn render(
     settings.font = font_family(&settings.font);
     let settings = &settings;
 
-    let mut warnings = Vec::new();
+    let mut warnings: Vec<String> = font_note.into_iter().collect();
     let source = build_source(book, &document, settings, true);
     // Debugging aid: EPUB2PDF_DUMP_TYPST=file.typ writes the generated source.
     if let Some(path) = std::env::var_os("EPUB2PDF_DUMP_TYPST") {
@@ -155,6 +161,7 @@ pub fn build_source(book: &Book, document: &Document, settings: &Settings, image
     let title = meta.title.clone().unwrap_or_default();
     let lang = language_code(meta.language.as_deref());
     let m = &settings.margins;
+    let fs = settings.font_size;
 
     let mut src = String::new();
     src.push_str(&format!("#set document(title: {}", typst_string(&title)));
@@ -163,19 +170,38 @@ pub fn build_source(book: &Book, document: &Document, settings: &Settings, image
         src.push_str(&format!(", author: ({},)", authors.join(", ")));
     }
     src.push_str(")\n");
+    // Nothing may be printed outside the margins, page numbers included, so
+    // the page number gets its own strip inside the bottom margin line: two
+    // blank single-spaced lines above it, then the number itself.
+    let footer_gap = 2.0 * SINGLE_LINE * fs;
+    let footer_strip = footer_gap + fs;
     src.push_str(&format!(
-        "#set page(paper: \"{}\", margin: (top: {}mm, bottom: {}mm, x: {}mm), \
-         footer: context align(center, text(size: 9pt, counter(page).display())))\n",
+        "#set page(paper: \"{}\", margin: (top: {}mm, bottom: {}mm + {footer_strip:.2}pt, \
+         inside: {}mm, outside: {}mm), footer-descent: {footer_gap:.2}pt, \
+         footer: context align(center, counter(page).display()))\n",
         settings.paper.typst_name(),
         m.top,
         m.bottom,
-        m.sides
+        m.inside,
+        m.outside
     ));
     src.push_str(&format!(
-        "#set text(font: ({}, {}), size: {}pt, lang: \"{lang}\", hyphenate: true)\n",
+        "#set text(font: ({}, {}, {}), size: {fs}pt, lang: \"{lang}\", hyphenate: true)\n",
         typst_string(&settings.font),
-        typst_string(DEFAULT_FONT),
-        settings.font_size
+        typst_string(FALLBACK_FONT),
+        typst_string(LAST_RESORT_FONT),
+    ));
+    let leading = leading_em(settings.line_spacing);
+    let single = leading_em(1.0);
+    // Chapter titles start 3.5 cm below the top edge of the page.
+    let chapter_gap = (CHAPTER_TOP_MM - m.top).max(0.0);
+    src.push_str(&format!(
+        "#set par(justify: true, leading: {leading:.3}em, spacing: {leading:.3}em, \
+         first-line-indent: 1.25cm)\n\
+         #show quote: set par(leading: {single:.3}em, spacing: {single:.3}em)\n\
+         #show table: set par(leading: {single:.3}em, spacing: {single:.3}em)\n\
+         #show heading: set text(size: {fs}pt)\n\
+         #show heading.where(level: 1): it => {{ v({chapter_gap}mm); it }}\n"
     ));
     src.push_str(TEMPLATE);
     if images {
@@ -217,15 +243,29 @@ pub fn build_source(book: &Book, document: &Document, settings: &Settings, image
     src
 }
 
+/// Height of one single-spaced line (ascender + descender) of Times New
+/// Roman, in em. Word processors multiply this for 1.5 or double spacing.
+const SINGLE_LINE: f64 = 1.107;
+/// Cap height of Times New Roman in em; Typst measures lines from it.
+const CAP_HEIGHT: f64 = 0.662;
+/// Distance of a chapter title from the top edge of the page, in mm.
+const CHAPTER_TOP_MM: f64 = 35.0;
+
+/// Typst `par.leading` for a word processor style line spacing (1, 1.5, 2).
+fn leading_em(line_spacing: f64) -> f64 {
+    (line_spacing * SINGLE_LINE - CAP_HEIGHT).max(0.1)
+}
+
 /// Page and text styles shared by every book.
-const TEMPLATE: &str = r#"#set par(justify: true, leading: 0.6em, spacing: 0.7em)
-#show heading: set text(hyphenate: false)
+///
+/// Following common thesis rules, all headings are bold at the body text
+/// size (set in [`build_source`]), chapter (level 1) titles are centred, and paragraphs are separated
+/// by a first-line indent instead of extra space.
+const TEMPLATE: &str = r#"#show heading: set text(weight: "bold", hyphenate: false)
 #show heading: set par(justify: false)
-#show heading.where(level: 1): set text(size: 1.5em)
-#show heading.where(level: 1): set block(above: 1.6em, below: 1.1em)
-#show heading.where(level: 2): set text(size: 1.25em)
-#show heading.where(level: 2): set block(above: 1.4em, below: 0.9em)
-#show heading.where(level: 3): set text(size: 1.1em)
+#show heading: set block(above: 1.5em, below: 1em)
+#show heading.where(level: 1): set align(center)
+#show heading.where(level: 1): set block(above: 1.5em, below: 2em)
 #show raw: set text(font: ("DejaVu Sans Mono",), size: 0.9em)
 #let xref(name, body) = context {
   let found = query(label(name))
@@ -262,9 +302,13 @@ fn language_code(language: Option<&str>) -> String {
     }
 }
 
-/// Embedded fonts, plus either a font file or the system fonts when a
-/// non-default font is requested.
-fn load_fonts(font: &str) -> Result<FontStore, RenderError> {
+/// Embedded fonts, plus either a font file or the system fonts when a font
+/// other than the embedded ones is requested.
+///
+/// Times New Roman is not embedded (its license does not allow it); when it
+/// is not installed the metric-compatible Liberation Serif is used and a note
+/// is returned.
+fn load_fonts(font: &str) -> Result<(FontStore, Option<String>), RenderError> {
     let mut store = FontStore::new();
     store.extend(EMBEDDED_FONTS.iter().flat_map(|data| {
         Font::iter(Bytes::new(*data)).map(|f| {
@@ -272,8 +316,8 @@ fn load_fonts(font: &str) -> Result<FontStore, RenderError> {
             (f, info)
         })
     }));
-    if font.eq_ignore_ascii_case(DEFAULT_FONT) {
-        return Ok(store);
+    if font.eq_ignore_ascii_case(FALLBACK_FONT) || font.eq_ignore_ascii_case(LAST_RESORT_FONT) {
+        return Ok((store, None));
     }
 
     let path = Path::new(font);
@@ -289,7 +333,7 @@ fn load_fonts(font: &str) -> Result<FontStore, RenderError> {
             return Err(RenderError::FontNotFound(font.to_string()));
         }
         store.extend(faces);
-        return Ok(store);
+        return Ok((store, None));
     }
 
     store.extend(typst_kit::fonts::system());
@@ -299,9 +343,16 @@ fn load_fonts(font: &str) -> Result<FontStore, RenderError> {
         .next()
         .is_none()
     {
+        if font.eq_ignore_ascii_case(DEFAULT_FONT) {
+            let note = t!(
+                "Times New Roman yüklü değil; ölçüleri aynı olan gömülü Liberation Serif kullanıldı",
+                "Times New Roman is not installed; the metric-compatible embedded Liberation Serif was used"
+            );
+            return Ok((store, Some(note)));
+        }
         return Err(RenderError::FontNotFound(font.to_string()));
     }
-    Ok(store)
+    Ok((store, None))
 }
 
 /// The family name to use in Typst for a `--font` value (a file path is

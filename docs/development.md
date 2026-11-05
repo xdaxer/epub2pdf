@@ -57,7 +57,8 @@ An EPUB is a zip archive of XHTML pages, images and a few XML files.
      image. If it is the first chapter it is printed as a cover without margin
      and page number.
 3. **Typeset** (`src/render.rs`). The generated source sets the page size,
-   margins, page numbers, the embedded DejaVu Serif font, justified text with
+   two-sided margins, page numbers inside the margins, the font (Times New
+   Roman, else the embedded Liberation Serif, then DejaVu Serif), justified text with
    hyphenation in the book's language, a page break before each chapter and
    PDF bookmarks from `h1`/`h2`. Typst compiles it in memory and `typst-pdf`
    writes the PDF with the title and author. If an image cannot be decoded,

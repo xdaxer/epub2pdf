@@ -276,6 +276,37 @@ fn check_and_info_work_with_both_names() {
 }
 
 #[test]
+fn set_shows_and_changes_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("no-config.toml");
+
+    let out = run("tr", dir.path(), &["set".as_ref()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(text(&out).contains("henüz yok") && text(&out).contains("Times New Roman"));
+
+    let args = ["ayarla", "punto", "11", "boyut", "A5"];
+    let args: Vec<&std::ffi::OsStr> = args.iter().map(|a| a.as_ref()).collect();
+    let out = run("tr", dir.path(), &args);
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    let saved = std::fs::read_to_string(&config).unwrap();
+    assert!(saved.contains("font_size = 11") && saved.contains("size = \"A5\""));
+
+    let out = run("en", dir.path(), &["set".as_ref(), "font-size".as_ref()]);
+    assert_eq!(out.status.code(), Some(2), "a key without a value");
+    let out = run(
+        "en",
+        dir.path(),
+        &["set".as_ref(), "x".as_ref(), "1".as_ref()],
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(text(&out).contains("unknown setting"));
+
+    let out = run("en", dir.path(), &["set".as_ref(), "--reset".as_ref()]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(!config.exists());
+}
+
+#[test]
 fn help_is_available_in_both_languages() {
     let dir = tempfile::tempdir().unwrap();
     let tr = run("tr", dir.path(), &["--help".as_ref()]);
@@ -284,4 +315,9 @@ fn help_is_available_in_both_languages() {
     assert!(text(&tr).contains("Kullanım:") && text(&tr).contains("--onizleme"));
     assert!(text(&en).contains("Usage:") && text(&en).contains("--preview"));
     assert!(!text(&tr).contains("Usage:"));
+    for flag in ["-v", "-V", "--version"] {
+        let out = run("en", dir.path(), &[flag.as_ref()]);
+        assert_eq!(out.status.code(), Some(0), "{flag}");
+        assert!(text(&out).contains(env!("CARGO_PKG_VERSION")), "{flag}");
+    }
 }

@@ -155,21 +155,81 @@ fn document_metadata_is_written_once() {
         "#set document(title: \"Deneme Kitabı: Şiir ve Ağaç\", author: (\"İpek Güneş\",))"
     ));
     assert!(source.contains("lang: \"tr\""));
-    assert!(source.contains("paper: \"a5\""));
+    assert!(source.contains("paper: \"a4\""));
+    assert!(source.contains("inside: 40mm, outside: 25mm"));
+    assert!(source.contains("leading: 0.998em"), "1.5 line spacing");
 }
 
 // --- config ---------------------------------------------------------------
 
 #[test]
-fn defaults_are_a5_dejavu_serif() {
+fn defaults_are_a4_thesis_layout() {
     let s = Settings::default();
-    assert_eq!(s.paper, Paper::A5);
-    assert_eq!(s.font, "DejaVu Serif");
-    assert_eq!(s.font_size, 10.5);
+    assert_eq!(s.paper, Paper::A4);
+    assert_eq!(s.font, "Times New Roman");
+    assert_eq!(s.font_size, 12.0);
+    assert_eq!(s.line_spacing, 1.5);
+    let m = s.margins;
     assert_eq!(
-        (s.margins.top, s.margins.sides, s.margins.bottom),
-        (18.0, 16.0, 20.0)
+        (m.top, m.inside, m.outside, m.bottom),
+        (25.0, 40.0, 25.0, 25.0)
     );
+}
+
+#[test]
+fn margins_take_one_three_or_four_values() {
+    let m = config::parse_margins("20").unwrap();
+    assert_eq!(
+        (m.top, m.inside, m.outside, m.bottom),
+        (20.0, 20.0, 20.0, 20.0)
+    );
+    let m = config::parse_margins("18,16,20").unwrap();
+    assert_eq!(
+        (m.top, m.inside, m.outside, m.bottom),
+        (18.0, 16.0, 16.0, 20.0)
+    );
+    let m = config::parse_margins("25, 40, 25mm, 30").unwrap();
+    assert_eq!(
+        (m.top, m.inside, m.outside, m.bottom),
+        (25.0, 40.0, 25.0, 30.0)
+    );
+    assert_eq!(m.to_string(), "25,40,25,30");
+    assert_eq!(
+        config::parse_margins("18,16,20").unwrap().to_string(),
+        "18,16,20"
+    );
+    assert!(config::parse_margins("1,2,3,4,5").is_none());
+}
+
+#[test]
+fn set_writes_validated_values_and_default_removes_them() {
+    use config::Key;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sub").join("config.toml");
+    let s = config::set_values(
+        &path,
+        &[
+            (Key::parse("punto").unwrap(), "10,5".into()),
+            (Key::parse("satır_aralığı").unwrap(), "2".into()),
+            (Key::parse("margins").unwrap(), "20".into()),
+        ],
+    )
+    .unwrap();
+    assert_eq!((s.font_size, s.line_spacing), (10.5, 2.0));
+    let file = config::read_file(&path).unwrap();
+    assert_eq!(file.font_size, Some(10.5));
+    assert_eq!(file.margins.as_deref(), Some("20"));
+
+    // An invalid value leaves the file untouched.
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(config::set_values(&path, &[(Key::Size, "A3".into())]).is_err());
+    assert!(config::set_values(&path, &[(Key::FontSize, "büyük".into())]).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    let s = config::set_values(&path, &[(Key::FontSize, "varsayılan".into())]).unwrap();
+    assert_eq!(s.font_size, 12.0);
+    assert_eq!(config::read_file(&path).unwrap().font_size, None);
+    assert!(Key::parse("bilinmeyen").is_none());
 }
 
 #[test]
@@ -187,7 +247,7 @@ fn command_line_overrides_config_file() {
     let s = config::combine(&file, &overrides).unwrap();
     assert_eq!(s.paper, Paper::A4);
     assert_eq!(s.font_size, 9.0);
-    assert_eq!(s.margins.sides, 10.0);
+    assert_eq!(s.margins.inside, 10.0);
 }
 
 #[test]
@@ -203,6 +263,10 @@ fn invalid_settings_are_rejected() {
     }));
     assert!(bad(Overrides {
         margins: Some("10,20".into()),
+        ..Default::default()
+    }));
+    assert!(bad(Overrides {
+        line_spacing: Some(5.0),
         ..Default::default()
     }));
     assert!(bad(Overrides {
